@@ -1,0 +1,539 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create VPC with RDS Aurora MySQL cluster, EC2 instance with ProxySQL
+
+Parameters:
+  VpcCIDR:
+    Type: String
+    Default: '10.3.0.0/16'
+  PublicSubnetACIDR:
+    Type: String
+    Default: '10.3.1.0/24'
+  PublicSubnetBCIDR:
+    Type: String
+    Default: '10.3.2.0/24'
+  PrivateSubnetACIDR:
+    Type: String
+    Default: '10.3.3.0/24'
+  PrivateSubnetBCIDR:
+    Type: String
+    Default: '10.3.4.0/24'
+  EC2InstanceAMI:
+    Type: String
+    Default: 'ami-0ee42e014ecaa7505'
+  EC2InstanceConnectCIDR:
+    Type: String
+    Default: '3.0.5.32/29'
+  DBEngine:
+    Type: String
+    Default: 'aurora-mysql'
+  DBEngineVersion:
+    Type: String
+    Default: '5.7'
+  DBClusterParameterGroupFamily:
+    Type: String
+    Default: 'aurora-mysql5.7'
+  DBMasterUsername:
+    Type: String
+    Default: 'admin'
+  DBMasterPassword:
+    Type: String
+    Default: 'mysqladmin'
+
+Resources:
+###### VPC and SUBNETS ######
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-VPC" ]]
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetACIDR
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-PublicSubnetA" ]]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetBCIDR
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-PublicSubnetB" ]]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetACIDR
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-PrivateSubnetA" ]]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetBCIDR
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-PrivateSubnetB" ]]
+    
+###### NETWORKING ######
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  NatGatewayAEIP:
+    Type: AWS::EC2::EIP
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAEIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+  NatGatewayBEIP:
+    Type: AWS::EC2::EIP
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayBEIP.AllocationId
+      SubnetId: !Ref PublicSubnetB
+
+  PublicRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  AssociatePublicRouteTableA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTableA
+  AssociatePublicRouteTableB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTableB
+  PublicRouteA:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTableA
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+  PublicRouteB:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTableB
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  AssociatePrivateRouteTableA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+  AssociatePrivateRouteTableB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB      
+  PrivateRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGatewayA
+  PrivateRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGatewayB
+
+###### DATABASE MySQL 5.7 ######
+  DBCluster57:
+    Type : "AWS::RDS::DBCluster"
+    Properties :
+      Engine : !Ref DBEngine
+      EngineVersion : !Ref DBEngineVersion
+      MasterUsername : !Ref DBMasterUsername
+      MasterUserPassword : !Ref DBMasterPassword
+      DBSubnetGroupName : !Ref DBSubnetGroup57
+      DBClusterParameterGroupName : !Ref DBClusterParameterGroup57
+      VpcSecurityGroupIds :
+        - !Ref DBSecurityGroup
+
+  DBInstance57:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBClusterIdentifier: !Ref DBCluster57
+      Engine : !Ref DBEngine
+      PubliclyAccessible: False
+      DBInstanceClass: db.r6g.large
+      EnablePerformanceInsights: true
+
+  DBSubnetGroup57:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription : "DB Subnet Group"
+      SubnetIds :
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  DBClusterParameterGroup57:
+    Type : "AWS::RDS::DBClusterParameterGroup"
+    Properties :
+      Description : "DB Cluster Parameter Group"
+      Family : !Ref DBClusterParameterGroupFamily
+      Parameters:
+        time_zone: US/Eastern
+        character_set_database: utf32
+
+###### DATABASE MySQL 8.0 ######
+  DBCluster80:
+    Type : "AWS::RDS::DBCluster"
+    Properties :
+      Engine : !Ref DBEngine
+      EngineVersion : '8.0'
+      MasterUsername : !Ref DBMasterUsername
+      MasterUserPassword : !Ref DBMasterPassword
+      DBSubnetGroupName : !Ref DBSubnetGroup80
+      DBClusterParameterGroupName : !Ref DBClusterParameterGroup80
+      VpcSecurityGroupIds :
+        - !Ref DBSecurityGroup
+
+  DBInstance80:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBClusterIdentifier: !Ref DBCluster80
+      Engine : !Ref DBEngine
+      PubliclyAccessible: False
+      DBInstanceClass: db.r6g.large
+      EnablePerformanceInsights: true
+
+  DBSubnetGroup80:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription : "DB Subnet Group"
+      SubnetIds :
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  DBClusterParameterGroup80:
+    Type : "AWS::RDS::DBClusterParameterGroup"
+    Properties :
+      Description : "DB Cluster Parameter Group"
+      Family : 'aurora-mysql8.0'
+      Parameters:
+        time_zone: US/Eastern
+        character_set_database: utf32
+
+###### COMPUTE ######
+  ProxySQLInstance1:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref EC2InstanceAMI
+      InstanceType: t4g.medium
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref ProxySQLSecurityGroup
+          SubnetId: !Ref PrivateSubnetA
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-EC2ProxySQL1" ]]
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+          : '
+          This script will handle an installation of proxysql and mysql
+          '
+
+          # Installation
+          cat <<EOF | sudo tee /etc/yum.repos.d/proxysql.repo
+          [proxysql_repo]
+          name=ProxySQL repository
+          baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.5.x/centos/8
+          gpgcheck=1
+          gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-2.5.x/repo_pub_key
+          EOF
+
+          dnf -y install proxysql
+          dnf -y localinstall https://dev.mysql.com/get/mysql80-community-release-el9-4.noarch.rpm
+          dnf -y install mysql mysql-community-client
+
+          dnf -y install httpd
+          echo "Hello from proxysql Instance 1" | tee /var/www/html/index.html
+
+          service proxysql start 
+          systemctl start httpd
+          systemctl enable httpd 
+  
+  ProxySQLInstance2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref EC2InstanceAMI
+      InstanceType: t4g.medium
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref ProxySQLSecurityGroup
+          SubnetId: !Ref PrivateSubnetB
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-EC2ProxySQL2" ]]
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+          : '
+          This script will handle an installation of proxysql and mysql
+          '
+
+          # Installation
+          cat <<EOF | sudo tee /etc/yum.repos.d/proxysql.repo
+          [proxysql_repo]
+          name=ProxySQL repository
+          baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.5.x/centos/8
+          gpgcheck=1
+          gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-2.5.x/repo_pub_key
+          EOF
+
+          dnf -y install proxysql
+          dnf -y localinstall https://dev.mysql.com/get/mysql80-community-release-el9-4.noarch.rpm
+          dnf -y install mysql mysql-community-client
+
+          dnf -y install httpd
+          echo "Hello from proxysql Instance 2" | tee /var/www/html/index.html
+
+          service proxysql start 
+          systemctl start httpd
+          systemctl enable httpd 
+
+  SysbenchInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref EC2InstanceAMI
+      InstanceType: t4g.medium
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref SysbenchSecurityGroup
+          SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-sysbench" ]]
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+
+          dnf -y install git gcc make automake libtool openssl-devel ncurses-compat-libs
+
+          dnf -y localinstall https://dev.mysql.com/get/mysql80-community-release-el9-4.noarch.rpm
+
+          dnf -y update
+
+          dnf -y install mysql-community-devel mysql-community-client mysql-community-common
+
+          git clone https://github.com/akopytov/sysbench
+          cd sysbench
+          ./autogen.sh
+          ./configure
+          make
+          make install
+
+  EC2InstanceConnectEndpoint:
+    Type: AWS::EC2::InstanceConnectEndpoint
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref ProxySQLSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-ProxysqlInstanceConnectEndpoint" ]]
+
+  SysbenchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref "AWS::StackName", "-SysbenchSG" ]]
+      GroupName: !Join ['', [!Ref "AWS::StackName", "-SysbenchSG" ]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: !Ref EC2InstanceConnectCIDR
+          IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          Description: "EC2 Instance Connect IP for Singapore"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-SysbenchSG" ]]
+
+  ProxySQLSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref "AWS::StackName", "-ProxySQLSG" ]]
+      GroupName: !Join ['', [!Ref "AWS::StackName", "-ProxySQLSG" ]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref SysbenchSecurityGroup
+          IpProtocol: "tcp"
+          FromPort: 80
+          ToPort: 80
+          Description: "Health Check"
+        - SourceSecurityGroupId: !Ref SysbenchSecurityGroup
+          IpProtocol: "tcp"
+          FromPort: 3306
+          ToPort: 3306
+          Description: "MySQL"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-ProxySQLSG" ]]
+  
+  PrxoySQLSGIngressSSHSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProxySQLSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      Description: ssh ownself
+      SourceSecurityGroupId: !Ref ProxySQLSecurityGroup
+
+  PrxoySQLSGIngressMySQLSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProxySQLSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6033
+      ToPort: 6033
+      Description: ProxySQL Ownself
+      SourceSecurityGroupId: !Ref ProxySQLSecurityGroup
+
+  PrxoySQLSGIngressHTTPSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProxySQLSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: health check ownself
+      SourceSecurityGroupId: !Ref ProxySQLSecurityGroup
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref "AWS::StackName", "-DBSG" ]]
+      GroupName: !Join ['', [!Ref "AWS::StackName", "-DBSG" ]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref ProxySQLSecurityGroup
+          IpProtocol: "tcp"
+          FromPort: 3306
+          ToPort: 3306
+          Description: "MySQL ProxySQL"
+        - SourceSecurityGroupId: !Ref SysbenchSecurityGroup
+          IpProtocol: "tcp"
+          FromPort: 3306
+          ToPort: 3306
+          Description: "MySQL Sysbench"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-DBSG" ]]
+  
+  NetworkLoadBalancer:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Type: network
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroups:
+        - !Ref ProxySQLSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-NLB" ]]
+  NLBListener80:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      DefaultActions:
+        - TargetGroupArn: !Ref NLBTargetGroup80
+          Type: "forward"
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 80
+      Protocol: TCP
+  NLBTargetGroup80:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VPC
+      Targets:
+        - Id: !Ref ProxySQLInstance1
+        - Id: !Ref ProxySQLInstance2
+  NLBListener3306:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      DefaultActions:
+        - TargetGroupArn: !Ref NLBTargetGroup6033
+          Type: "forward"
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 3306
+      Protocol: TCP
+  NLBTargetGroup6033:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      Port: 6033
+      Protocol: TCP
+      VpcId: !Ref VPC
+      Targets:
+        - Id: !Ref ProxySQLInstance1
+        - Id: !Ref ProxySQLInstance2
+
+Outputs:
+  Aurora80WriterEndpoint:
+    Value: !GetAtt DBCluster80.Endpoint.Address
+    Description: Aurora MySQL 8.0 Writer Endpoint
+  Aurora80ReaderEndpoint:
+    Value: !GetAtt DBCluster80.ReadEndpoint.Address
+    Description: Aurora MySQL 8.0 Reader Endpoint
+  Aurora57WriterEndpoint:
+    Value: !GetAtt DBCluster57.Endpoint.Address
+    Description: Aurora MySQL 5.7 Writer Endpoint
+  Aurora57ReaderEndpoint:
+    Value: !GetAtt DBCluster57.ReadEndpoint.Address
+    Description: Aurora MySQL 5.7 Reader Endpoint
+  NLBEndpoint:
+    Value: !GetAtt NetworkLoadBalancer.DNSName
+    Description: Endpoint for NLB
+    
