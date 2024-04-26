@@ -36,18 +36,29 @@ aws cloudformation create-stack --stack-name proxysql-demo --template-body file:
 ```
 
 ### 2. Fill up the appropriate credentials in scripts/init-db.bash
-Go to CloudFormation Outputs and you can find the appropriate endpoints
-- WRITER_ENDPOINT="" 
-    - CloudFormation Output Aurora80WriterEndpoint
-- READER_ENDPOINT="" 
-    - CloudFormation Output Aurora80ReaderEndpoint
-- MYSQL_ADMIN_USER="" 
-    - default = admin
-- MYSQL_ADMIN_PASSWORD="" 
-    - default = mysqladmin
+We will now populate the `scripts/init-db.bash` script so that we can set up the ProxySQL instances. Go to CloudFormation Outputs and you can find the appropriate endpoints. In CloudFormation Outputs, you will need `Aurora80WriterEndpoint` and `Aurora57ReaderEndpoint`.
+
+```
+WRITER_ENDPOINT="fill_up_with_MySQL8.0_writer" 
+READER_ENDPOINT="fill_up_with_MySQL8.0_reader" 
+MYSQL_ADMIN_USER="fill_up" (default: admin)
+MYSQL_ADMIN_PASSWORD="fill_up" (default: mysqladmin)
+```
+
+![Credentials Example for Scripts/init-db.bash](images/init-db-credentials.png)
 
 ### 3. Connect to ProxySQL Instance 1
+Go to the AWS Console and navtigate to all your EC2 Instances. Choose `proxysql-demo-EC2ProxySQL1`. 
+
+![Finding ProxySQL Instance 1](images/proxysql1.png)
+
+<br />
+
+![Choosing to Connect to ProxySQL Instance 1](images/proxysql1-connect.png)
+
 Use `EC2 Instance Connect Endpoint` to log into the first ProxySQL EC2 instance (proxysql-demo-EC2ProxySQL1)
+
+![Connecting using EC2 Instance Connect Endpoint](images/proxysql1-eice.png)
 
 ### 4. Setup ProxySQL Instance 1
 Run the `scripts/init-db.bash` script by copy and pasting into the command line of ProxySQL Instance 1. 
@@ -56,42 +67,78 @@ If you receive `-bash: mysql: command not found` error, in the command line of P
 1. Run `sudo su`
 2. Copy and paste the contents from `scripts/install-proxysql-and-mysql.bash` into the command line
 3. run `exit`
-4. Re-run `scripts/init-db.bash`.
+4. Now Copy and paste `scripts/init-db.bash` into the command line and re run the script.
+
+You should be able to see an output like this. If you see `mysql: [Warning] ... can be insecure`, you are on the right track. You can choose to copy and paste the script again and you will see the tables appear:
+
+![init-db output](images/init-db-output.png)
+
+In the tables, if `connect_success` or `ping_success` are shown to be 0, it means that you have entered the wrong credentials for your Aurora MySQL 8.0 database.
 
 ### 5. Connect to ProxySQL Instance 2
+Go to the AWS Console and navtigate to all your EC2 Instances. Choose `proxysql-demo-EC2ProxySQL2`. 
+
+![Finding ProxySQL Instance 2](images/proxysql2.png)
+
+<br />
+
+![Choosing to Connect to ProxySQL Instance 2](images/proxysql2-connect.png)
+
 Use `EC2 Instance Connect Endpoint` to log into the second ProxySQL EC2 instance (proxysql-demo-EC2ProxySQL2)
+
+![Connecting using EC2 Instance Connect Endpoint](images/proxysql2-eice.png)
 
 ### 6. Setup ProxySQL Instance 2 
 Run the `scripts/init-db.bash` script by copy and pasting into the command line of ProxySQL Instance 2. 
 
-If you receive `-bash: mysql: command not found` error, in the command line of ProxySQL Instance 1:
+If you receive `-bash: mysql: command not found` error, in the command line of ProxySQL Instance 2:
 1. Run `sudo su`
 2. Copy and paste the contents from `scripts/install-proxysql-and-mysql.bash` into the command line
 3. run `exit`
-4. Re-run `scripts/init-db.bash`.
+4. Now Copy and paste `scripts/init-db.bash` into the command line and re run the script.
+
+You should be able to see an output like this. If you see `mysql: [Warning] ... can be insecure`, you are on the right track. You can choose to copy and paste the script again and you will see the tables appear:
+
+![init-db output](images/init-db-output.png)
+
+In the tables, if `connect_success` or `ping_success` are shown to be 0, it means that you have entered the wrong credentials for your Aurora MySQL 8.0 database.
 
 ### 7. Connect to proxysql from a testing server!
-We have provisioned a testing instance in one of the public subnets. You can access this instance from the EC2 Console (proxysql-demo-sysbench). Use `EC2 Instance Connect`, not `EC2 Instance Connect Endpoint`.
+We have provisioned a testing instance in one of the public subnets. You can access this instance from the EC2 Console. Look for `proxysql-demo-sysbench`. 
 
-Once inside the Sysbench test server, run the following command to check if the Proxysql servers are up and running. **You can find the NLB Endpoints from CloudFormation Outputs**: 
-    ```
-    curl <NLB-endpoint>
-    ```
-- You will see "Hello from proxysql Instance 1" or "Hello from proxysql instance 2" if you are successful
-- Run the following commands. 
+![Finding Sysbench](images/sysbench.png)
+
+Connect to your instance with `EC2 Instance Connect` this time, not `EC2 Instance Connect Endpoint`.
+
+![Connecting using EC2 Instance Connect](images/sysbench-eic.png)
+
+Once inside the Sysbench test server, run the following command to check if the Proxysql servers are up and running. **You can find the NLB Endpoint from CloudFormation Outputs**:
+
+```
+curl <NLB-endpoint>
+```
+
+You will see "Hello from proxysql Instance 1" or "Hello from proxysql instance 2" if you are successful
+
+- Next, run the following commands: 
+
     ```
     sysbench --version
     mysql --version
     ```
-- If you do not see the version being listed, copy and paste the `scripts/install-sysbench.bench` to install the necessary modules. 
+
+- If you do not see the version being listed, copy and paste the `scripts/install-sysbench.bash` to install the necessary modules. 
 - To connect to your ProxySQL Instances, run the following commmand:
+
     ```
     mysql -h <NLB-Endpoint> -ustnduser -pstnduser -P3306
     ```
 
+![Successfully executing commands on Sysbench](images/sysbench-success.png)
+
 You can now connect to ProxySQL from the test server!
 
-Congratulations, you are now able to connect to your MySQL Cluster via a Highly Available Deployment of ProxySQL
+Congratulations, you are now able to connect to your MySQL Cluster via a Highly Available Deployment of ProxySQL!
 
 ## Scripts
 There are a couple of helper scripts that can be found in the `scripts/` folder. This section provides a brief look into what they do.
@@ -105,19 +152,20 @@ This script initialises the ProxySQL Server and Aurora MySQL 8.0 Database with t
 
 Most notably, you will need to fill in the following parameters in the script. The writer and reader endpoints should point to Aurora MySQL 8.0, and they can be found in the CloudFormation Outputs section. The Admin user and password should be set according to best practices. In the recommended demo, we have set it to default to `MYSQL_ADMIN_USER=admin` and `MYSQL_ADMIN_PASSWORD=mysqladmin`.
 
-    ```
-    # Aurora Cluster variables
-    export WRITER_ENDPOINT=""
-    export READER_ENDPOINT=""
-    export MYSQL_ADMIN_USER=""
-    export MYSQL_ADMIN_PASSWORD=""
-    ```
+```
+# Aurora Cluster variables
+export WRITER_ENDPOINT=""
+export READER_ENDPOINT=""
+export MYSQL_ADMIN_USER=""
+export MYSQL_ADMIN_PASSWORD=""
+```
 
 If you are unsure if ProxySQL is connected, you can run the following commands in the script. These commands provide us insight as to whether the ProxySQL-Aurora integration has been correctly setup. Look at the ProxySQL documentation if more help is needed:
-    ```
-    execute_proxysql_command "SELECT * FROM monitor.mysql_server_connect_log ORDER BY time_start_us DESC LIMIT 3;"
-    execute_proxysql_command "SELECT * FROM monitor.mysql_server_ping_log ORDER BY time_start_us DESC LIMIT 3;"
-    ```
+
+```
+execute_proxysql_command "SELECT * FROM monitor.mysql_server_connect_log ORDER BY time_start_us DESC LIMIT 3;"
+execute_proxysql_command "SELECT * FROM monitor.mysql_server_ping_log ORDER BY time_start_us DESC LIMIT 3;"
+```
 
 ### install-proxysql-and-mysql.bash
 This script installs the necessary resources to run proxysql locally. On some scenarios, the EC2 is unable to install proxysql and this script must be run manually after startup.
@@ -134,25 +182,29 @@ This Script sets up the sysbench tables and environment from the `Sysbench EC2 i
 Appropriate sysbench tables will be created on your MySQL5.7 and MySQL8.0 Databases. Note that in this template, we have spun up 2 Databases: (1) Aurora MySQL 8.0, and (2) Aurora MySQL 5.7. The Aurora MySQL 5.7 database is there to help in benchmarking tests.
 
 Take note that you will need to fill up the following variables:
-    ```
-    export MYSQL_USER="fill_up"
-    export MYSQL_PASSWORD="fill_up"
-    export MYSQL_HOST="fill_up_with_MySQL5.7_writer"
-    ```
+
+```
+export MYSQL_USER="fill_up"
+export MYSQL_PASSWORD="fill_up"
+export MYSQL_HOST="fill_up_with_MySQL5.7_writer"
+```
+
+The MYSQL_USER and MYSQL_PASSWORD are the ones that you used previously in the `scripts/init.db-bash` or in the CloudFormation Parameters. If you did not change them, the default is `MYSQL_USER=admin` and `MYSQL_PASSWORD=mysqladmin`
 
 and also do not forget the variable near the bottom of the script:
 
-    ```
-    export MYSQL_HOST="fill_up_with_MySQL8.0_writer"
-    ```
+```
+export MYSQL_HOST="fill_up_with_MySQL8.0_writer"
+```
 
 This script is only needed if you want to run performance tests via the `Sysbench EC2 Instance`.
 
 ### tune.sql
 This script is to be run on the ProxySQL servers as it helps to tune the different parameters accordingly. You must first log into the ProxySQL server in order to run the script. You should log in as the ProxySQL admin account. The default credentials are shown below. The admin user should have been set in `scripts/init-db.bash`:
-    ```
-    mysql -h127.0.0.1 -uadmin -padmin -P6032
-    ```
+    
+```
+mysql -h127.0.0.1 -uadmin -padmin -P6032
+```
 
 It is not recommended to adjust the script unless you have a good understanding of the parameters. These can be found in the official ProxySQL site.
 
@@ -163,9 +215,10 @@ you will find this command: `update mysql_query_rules set cache_ttl=300000 where
 This script is to be run on the ProxySQL servers as it runs a set of commands that gives information into what is happening in ProxySQL, and some parameters that have been set.
 
 You must first log into the ProxySQL server in order to run the script. You should log in as the ProxySQL admin account. The default credentials are shown below. The admin user should have been set in `scripts/init-db.bash`:
-    ```
-    mysql -h127.0.0.1 -uadmin -padmin -P6032
-    ```
+
+```
+mysql -h127.0.0.1 -uadmin -padmin -P6032
+```
 
 Note that running this will flush Query Cache Statistics. 
 
